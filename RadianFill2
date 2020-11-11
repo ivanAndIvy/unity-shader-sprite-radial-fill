@@ -1,0 +1,123 @@
+Shader "Sprites/Fill"
+{
+    Properties
+    {
+        [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
+        _Color ("Tint", Color) = (1,1,1,1)
+        [MaterialToggle] PixelSnap ("Pixel snap", Float) = 0
+这里做了第一处修改，代码里面可以通过SetFloat("_Fill",0.5f) 来修改这个值。
+这个接口的意义，输入0-1，绘制0度到360度的贴图
+
+如图，这是参数为0.32时候绘制的贴图。有了他就可以在游戏内实现
+类似技能CD转圈提示的效果了。
+        _Fill ("Fill", Range(0,1)) = 0
+    }
+
+    SubShader
+    {
+        Tags
+        { 
+            "Queue"="Transparent" 
+            "IgnoreProjector"="True" 
+            "RenderType"="Transparent" 
+            "PreviewType"="Plane"
+            "CanUseSpriteAtlas"="True"
+        }
+
+        Cull Off
+        Lighting Off
+        ZWrite Off
+        Fog { Mode Off }
+        Blend SrcAlpha OneMinusSrcAlpha
+
+        Pass
+        {
+        CGPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile DUMMY PIXELSNAP_ON
+            #include "UnityCG.cginc"
+            
+            struct appdata_t
+            {
+                float4 vertex   : POSITION;
+                float4 color    : COLOR;
+                float2 texcoord : TEXCOORD0;
+            };
+
+            struct v2f
+            {
+                float4 vertex   : SV_POSITION;
+                fixed4 color    : COLOR;
+                half2 texcoord  : TEXCOORD0;
+            };
+            
+            fixed4 _Color;
+这里接收上面传进来的_Fill值，语法就不多啰嗦了。
+            float _Fill;
+
+            v2f vert(appdata_t IN)
+            {
+                v2f OUT;
+                OUT.vertex = mul(UNITY_MATRIX_MVP, IN.vertex);
+                OUT.texcoord = IN.texcoord;
+                OUT.color = IN.color * _Color;
+                #ifdef PIXELSNAP_ON
+                OUT.vertex = UnityPixelSnap (OUT.vertex);
+                #endif
+
+                return OUT;
+            }
+
+            sampler2D _MainTex;
+
+            fixed4 frag(v2f IN) : COLOR
+            {
+                
+这里才是正题。有多种方法，判定一个点是不是在从0度，到N度之间的范围之内。
+比如求点到圆心的向量到正方向的单位向量的点积等等。
+最终我选择了求Atan值并且分区间求解的方案，因为计算量相对小，更主要是精度高。
+没有噪点。
+                fixed4 result = tex2D(_MainTex, IN.texcoord) * IN.color;
+这一步相当于是把任意的UV坐标点，转换为以0.0为中心，-0.5 到 0.5范围的点。
+                fixed2 p = fixed2( IN.texcoord.x - 0.5, IN.texcoord.y - 0.5);
+这相当于是分两段计算，因为直接取atan的时候，左右两边会有相同的值，没法判断左半圈还是右半圈。
+                if( _Fill< 0.5 )
+                {
+将_Fill 0-0.5的值，映射给0-pie，只处理左半边，右半边全部按照 alpha = 0处理
+                    float compare = ( _Fill * 2 - 0.5) * 3.1415926;
+
+                    float theta = atan( p.y / p.x );
+                    if( theta > compare )
+                    {
+                        result.a = 0;
+                    }
+
+                    if( p.x>0 )
+                    {
+                        result.a = 0;
+                    }
+                }
+                else
+                {
+将_Fill 0.5-1映射给0-pie，左半边按照 alpha = alpha * 1处理。只计算右半边。
+因此关键点只有1点，就是计算 atan 以及将问题分治解决，将_Fill分两段分别映射。
+应该有更好的方案，但是我数学学渣，只能先这么凑合了~{：-）】
+                    float compare = ((_Fill-0.5) * 2 -0.5) * 3.1415926;
+                    float theta = atan( p.y / p.x );
+
+                    if( p.x > 0 )
+                    {
+                        if( theta > compare )
+                        {
+                            result.a = 0;
+                        }
+                    }
+                }
+
+                return result;
+            }
+        ENDCG
+        }
+    }
+}
